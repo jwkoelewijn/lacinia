@@ -13,9 +13,9 @@
   :profiles {:dev {:dependencies [[criterium "0.4.5"]
                                   [expound "0.7.2"]
                                   [joda-time "2.10.1"]
-                                  [com.walmartlabs/test-reporting "0.1.0"]
-                                  [io.aviso/logging "0.3.1"]
-                                  [io.pedestal/pedestal.log "0.5.5"]
+                                  ;[com.walmartlabs/test-reporting "0.1.0"]
+                                  ;[io.aviso/logging "0.3.1"]
+                                  ;[io.pedestal/pedestal.log "0.5.5"]
                                   [org.clojure/test.check "0.9.0"]
                                   [org.clojure/data.csv "0.1.4"]
                                   [org.clojure/tools.cli "0.4.2"]]}}

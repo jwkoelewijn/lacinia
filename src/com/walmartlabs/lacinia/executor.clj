@@ -22,7 +22,8 @@
     [com.walmartlabs.lacinia.resolve :as resolve
      :refer [resolve-as combine-results]]
     [com.walmartlabs.lacinia.selector-context :as sc]
-    [com.walmartlabs.lacinia.constants :as constants])
+    [com.walmartlabs.lacinia.constants :as constants]
+    [com.walmartlabs.lacinia.directives :as directives])
   (:import
     (clojure.lang PersistentQueue)))
 
@@ -127,14 +128,24 @@
         {:keys [context]} execution-context
         schema (get context constants/schema-key)
         resolved-type (:resolved-type execution-context)
+
         resolve-context (assoc context
-                               :com.walmartlabs.lacinia/container-type-name resolved-type
-                               constants/selection-key field-selection)
+                          :com.walmartlabs.lacinia/container-type-name resolved-type
+                          constants/selection-key field-selection)
+
         field-resolver (field-selection-resolver schema field-selection resolved-type container-value)
+
+        resolver-chain (directives/directive-resolver-chain-for (get-in execution-context [:context constants/schema-key])
+                                                                (get-in field-selection [:field-definition :directives]))
+
+        field-allowed? (resolver-chain (:context execution-context) nil)
+
         start-ms (when (and (some? *timings)
                             (not (-> field-resolver meta ::schema/default-resolver?)))
                    (System/currentTimeMillis))
-        resolver-result (field-resolver resolve-context arguments container-value)]
+        resolver-result (if field-allowed?
+                          (field-resolver resolve-context arguments container-value)
+                          (resolve/resolve-as ::not-allowed {:message "Access to this field is not allowed"}))]
     ;; If not collecting timing results, then the resolver-result is all we need.
     ;; Otherwise, we need to create an extra promise so that we can observe the
     ;; delivery of the value to update our timing information. The downside is
@@ -231,27 +242,39 @@
         final-result (resolve/resolve-promise)]
     (resolve/on-deliver! resolver-result
                          (fn [resolved-field-value]
-                           (let [sub-selection (cond
-                                                 (and non-nullable-field?
-                                                      (nil? resolved-field-value))
-                                                 ::null
+                           (if (and (sc/is-wrapped-value? resolved-field-value)
+                                    (= ::not-allowed (:value resolved-field-value)))
+                             (resolve/deliver! final-result (->ResultTuple alias nil))
+                             (let [sub-selection (cond
+                                                   (and non-nullable-field?
+                                                        (nil? resolved-field-value))
+                                                   ::null
 
-                                                 ;; child field was non-nullable and resolved to null,
-                                                 ;; but parent is nullable so let's null parent
-                                                 (and (= resolved-field-value ::null)
-                                                      (not non-nullable-field?))
-                                                 nil
+                                                   ;; child field was non-nullable and resolved to null,
+                                                   ;; but parent is nullable so let's null parent
+                                                   (and (= resolved-field-value ::null)
+                                                        (not non-nullable-field?))
+                                                   nil
 
-                                                 (map? resolved-field-value)
-                                                 (propogate-nulls non-nullable-field? resolved-field-value)
+                                                   (map? resolved-field-value)
+                                                   (propogate-nulls non-nullable-field? resolved-field-value)
 
-                                                 ;; TODO: We also support sets
-                                                 (vector? resolved-field-value)
-                                                 (mapv #(propogate-nulls non-nullable-field? %) resolved-field-value)
+                                                   ;; TODO: We also support sets
+                                                   (vector? resolved-field-value)
+                                                   (mapv #(propogate-nulls non-nullable-field? %)
+                                                         (reduce
+                                                          (fn [acc val]
+                                                            (if-not (and
+                                                                     (sc/is-wrapped-value? val)
+                                                                     (= ::not-allowed (:value val)))
+                                                              (conj acc val)
+                                                              acc))
+                                                          []
+                                                          resolved-field-value))
 
-                                                 :else
-                                                 resolved-field-value)]
-                             (resolve/deliver! final-result (->ResultTuple alias sub-selection)))))
+                                                   :else
+                                                   resolved-field-value)]
+                               (resolve/deliver! final-result (->ResultTuple alias sub-selection))))))
     final-result))
 
 (defn ^:private maybe-apply-fragment
@@ -360,7 +383,7 @@
                          (->> errors
                               (mapcat #(enhance-errors selection execution-context' %))
                               (swap! (get execution-context' ec-atom-key) into))))
-
+        schema (get-in execution-context [:context constants/schema-key])
         ;; The selector pipeline validates the resolved value and handles things like iterating over
         ;; seqs before (repeatedly) invoking the callback, at which point, it is possible to
         ;; perform a recursive selection on the nested fields of the origin field.
@@ -368,18 +391,27 @@
         (fn selector-callback [{:keys [resolved-value resolved-type execution-context] :as selection-context}]
           ;; Any errors from the resolver (via with-errors) or anywhere along the
           ;; selection pipeline are enhanced and added to the execution context.
-          (apply-errors selection-context :errors :*errors)
-          (apply-errors selection-context :warnings :*warnings)
+          (let [directives (if is-fragment? [] (get-in schema [resolved-type :directives]))
+                filtering-chain (directives/directive-resolver-chain-for schema directives)
+                allowed? (filtering-chain (:context execution-context) resolved-value)
+                selection-context' (if allowed?
+                                     selection-context
+                                     (update selection-context :errors (fnil conj []) {:message (str "Access not allowed for node: " (:id resolved-value))}))]
 
-          (if (and (some? resolved-value)
-                   resolved-type
-                   (seq sub-selections))
-            (execute-nested-selections
-              (assoc execution-context
-                     :resolved-value resolved-value
-                     :resolved-type resolved-type)
-              sub-selections)
-            (resolve/resolve-as resolved-value)))
+            (apply-errors selection-context' :errors :*errors)
+            (apply-errors selection-context' :warnings :*warnings)
+
+            (if-not allowed?
+              (resolve/resolve-as ::not-allowed nil)
+              (if (and (some? resolved-value)
+                       resolved-type
+                       (seq sub-selections))
+                (execute-nested-selections
+                  (assoc execution-context
+                    :resolved-value resolved-value
+                    :resolved-type resolved-type)
+                  sub-selections)
+                (resolve/resolve-as resolved-value)))))
         ;; In a concrete type, we know the selector from the field definition
         ;; (a field definition on a concrete object type).  Otherwise, we need
         ;; to use the type of the parent node's resolved value, just
@@ -455,6 +487,20 @@
                                                       (resolve/deliver! final-result resolved-value)))))
         final-result))))
 
+(defn remove-not-allowed [data]
+  (reduce (fn [mem [k v]]
+            (if (= ::not-allowed v)
+              mem
+              (let [val (cond
+                          (map? v) (remove-not-allowed v)
+                          (vector? v) (mapv remove-not-allowed v)
+                          (list? v) (map remove-not-allowed v)
+                          :else v)]
+                (assoc mem k val))))
+          (ordered-map)
+          data))
+
+
 (defn execute-query
   "Entrypoint for execution of a query.
 
@@ -489,9 +535,13 @@
                            (execute-nested-selections-sync execution-context enabled-selections)
                            (execute-nested-selections execution-context enabled-selections))
         result-promise (resolve/resolve-promise)]
+
     (resolve/on-deliver! operation-result
                          (fn [selected-data]
-                           (let [data (propogate-nulls false selected-data)]
+                           (let [data (->> selected-data
+                                           (remove-not-allowed)
+                                           (propogate-nulls false))] ;selected-data))]
+
                              (let [errors (seq @*errors)
                                    warnings (seq @*warnings)
                                    extensions @*extensions]

@@ -75,6 +75,10 @@
         (update? :mutations f)
         (update? :subscriptions f))))
 
+(defn attach-directive-resolvers [schema directives-map]
+  "Attaches a directive resolver map to the schema"
+  (assoc schema :directive-resolvers directives-map))
+
 (defn attach-streamers
   "Attaches stream handler functions to subscriptions.
 

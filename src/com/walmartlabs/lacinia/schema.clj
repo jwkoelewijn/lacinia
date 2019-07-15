@@ -34,7 +34,8 @@
     [clojure.string :as str]
     [clojure.set :refer [difference]]
     [clojure.pprint :as pprint]
-    [com.walmartlabs.lacinia.selector-context :as sc])
+    [com.walmartlabs.lacinia.selector-context :as sc]
+    [com.walmartlabs.lacinia.directives :as directives])
   (:import
     (clojure.lang IObj)
     (java.io Writer)))
@@ -654,12 +655,13 @@
 
         selector (if (= :scalar category)
                    (let [serializer (:serialize field-type)]
-                     (fn select-coerion [selector-context]
+                     (fn select-coercion [selector-context]
                        (cond-let
 
                          :let [{:keys [resolved-value]} selector-context]
 
-                         (nil? resolved-value)
+                         (or (nil? resolved-value)
+                             (= :com.walmartlabs.lacinia.executor/not-allowed resolved-value))
                          (selector selector-context)
 
                          :let [serialized (try
@@ -843,11 +845,11 @@
             (reduce #(combine-results conj %1 %2)
                     (resolve-as [])
                     (map-indexed
-                      (fn [i v]
-                        (unwrapper (-> selector-context
-                                       (assoc :resolved-value v)
-                                       (update :path conj i))))
-                      resolved-value))))))
+                     (fn [i v]
+                       (unwrapper (-> selector-context
+                                      (assoc :resolved-value v)
+                                      (update :path conj i))))
+                     resolved-value))))))
 
     :non-null
     (let [next-selector (assemble-selector schema object-type field (:type type))]
@@ -1027,9 +1029,9 @@
         ;; The detail for each value is the map that may includes :enum-value and
         ;; may include :description, :deprecated, and/or :directives.
         details (reduce (fn [m {:keys [enum-value] :as detail}]
-                               (assoc m enum-value detail))
-                             {}
-                             value-defs)]
+                          (assoc m enum-value detail))
+                        {}
+                        value-defs)]
     (when-not (= (count values) (count values-set))
       (throw (ex-info (format "Values defined for enum %s must be unique."
                               (-> enum-def :type-name q))
@@ -1463,6 +1465,7 @@
     (-> {::roots {:query query
                   :mutation mutation
                   :subscription subscription}
+         ::directive-resolvers (:directive-resolvers schema)
          ::options options}
         (xfer-types merged-scalars :scalar)
         (xfer-types (:enums schema) :enum)
