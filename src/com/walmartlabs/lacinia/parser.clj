@@ -318,17 +318,45 @@
       (let [object-fields (:fields schema-type)
             default-values (collect-default-values object-fields)
             required-keys (keys (filter-vals non-null-kind? object-fields))
+
+            directives (constants/directive-definitions-key schema)
+            allowed-directives (-> directives keys set)
+            directive->visitor (fn directive->visitor [{:keys [directive-type]}]
+                                 (get-in schema [constants/directive-visitors-key directive-type]))
+
             process-object-field (fn [m k v]
                                    (if-let [field (get object-fields k)]
-                                     (assoc m k
-                                            (process-literal-argument schema field v))
+                                     (let [directives (:directives field)
+                                           applicable-directives (->> directives
+                                                                      (filter (fn [{:keys [directive-type]}]
+                                                                                (allowed-directives directive-type))))
+                                           visitor (or (first (map directive->visitor applicable-directives))
+                                                       (constantly v))]
+                                       (assoc m k
+                                              (process-literal-argument schema field (visitor {:category :input-field-definition
+                                                                                               :execution-context {:schema schema}
+                                                                                               :field-selection nil
+                                                                                               :resolver (constantly v)}))))
                                      (throw-exception (format "Input object contained unexpected key %s."
                                                               (q k))
                                                       {:schema-type type-name})))
             object-value (reduce-kv process-object-field
                                     {}
                                     arg-value)
-            with-defaults (merge default-values object-value)]
+
+
+
+            applicable-directives (->> (get-in schema [type-name :directives])
+                                       (filter (fn [{:keys [directive-type]}]
+                                                 (allowed-directives directive-type))))
+
+            visitor (or (first (map directive->visitor applicable-directives))
+                        (constantly object-value))
+
+            with-defaults (merge default-values (visitor {:category :input-object
+                                                          :execution-context {:schema schema}
+                                                          :field-selection nil
+                                                          :resolver (constantly object-value)}))]
         (doseq [k required-keys]
           (when (nil? (get with-defaults k))
             (throw-exception (format "No value provided for non-nullable key %s of input object %s."
@@ -351,7 +379,7 @@
 (defmethod process-literal-argument :array
   [schema argument-definition arg-tuple]
   (let [kind (-> argument-definition :type :kind)
-       [_ arg-value :as arg-tuple*] (coerce-to-multiple-if-list-type argument-definition arg-tuple)]
+        [_ arg-value :as arg-tuple*] (coerce-to-multiple-if-list-type argument-definition arg-tuple)]
     (case kind
       :non-null
       (recur schema (use-nested-type argument-definition) arg-tuple*)

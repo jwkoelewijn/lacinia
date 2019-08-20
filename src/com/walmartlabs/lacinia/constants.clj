@@ -26,3 +26,11 @@
 (def ^{:added "0.17.0"} selection-key
   "Context key storing the current selection."
   :com.walmartlabs.lacinia/selection)
+
+(def ^{:added "0.34.0"} directive-definitions-key
+  "Context key storing directive visitors."
+  :com.walmartlabs.lacinia.schema/directive-defs)
+
+(def ^{:added "0.34.0"} directive-visitors-key
+  "Context key storing directive visitors."
+  :com.walmartlabs.lacinia.schema/directive-visitors)

@@ -22,19 +22,20 @@
   schema, and pre-computing many defaults."
   (:refer-clojure :exclude [compile])
   (:require
-    [clojure.spec.alpha :as s]
-    [com.walmartlabs.lacinia.introspection :as introspection]
-    [com.walmartlabs.lacinia.internal-utils
-     :refer [map-vals map-kvs filter-vals deep-merge q
-             is-internal-type-name? sequential-or-set? as-keyword
-             cond-let ->TaggedValue is-tagged-value? extract-value extract-type-tag
-             to-message qualified-name]]
-    [com.walmartlabs.lacinia.resolve :as resolve
-     :refer [ResolverResult resolve-as combine-results is-resolver-result?]]
-    [clojure.string :as str]
-    [clojure.set :refer [difference]]
-    [clojure.pprint :as pprint]
-    [com.walmartlabs.lacinia.selector-context :as sc])
+   [clojure.spec.alpha :as s]
+   [com.walmartlabs.lacinia.introspection :as introspection]
+   [com.walmartlabs.lacinia.internal-utils
+    :refer [map-vals map-kvs filter-vals deep-merge q
+            is-internal-type-name? sequential-or-set? as-keyword
+            cond-let ->TaggedValue is-tagged-value? extract-value extract-type-tag
+            to-message qualified-name]]
+   [com.walmartlabs.lacinia.resolve :as resolve
+    :refer [ResolverResult resolve-as combine-results is-resolver-result?]]
+   [clojure.string :as str]
+   [clojure.set :refer [difference]]
+   [clojure.pprint :as pprint]
+   [com.walmartlabs.lacinia.selector-context :as sc]
+   [com.walmartlabs.lacinia.constants :as constants])
   (:import
     (clojure.lang IObj)
     (java.io Writer)))
@@ -839,14 +840,28 @@
                                       next-sc (sc/apply-wrapped-value sc v)]
                                   (if (sc/is-wrapped-value? next-v)
                                     (recur next-v next-sc)
-                                    (next-selector (assoc next-sc :resolved-value next-v)))))))]
+                                    (next-selector (assoc next-sc :resolved-value next-v)))))))
+                directives (constants/directive-definitions-key schema)
+                allowed-directives (-> directives keys set)
+                directive->visitor (fn directive->visitor [{:keys [directive-type]}]
+                                     (get-in schema [constants/directive-visitors-key directive-type]))]
             (reduce #(combine-results conj %1 %2)
                     (resolve-as [])
                     (map-indexed
                       (fn [i v]
-                        (unwrapper (-> selector-context
-                                       (assoc :resolved-value v)
-                                       (update :path conj i))))
+                        (let [field-type (get-in type [:type :type])
+                              applicable-directives (->> (get-in schema [field-type :values-detail v :directives])
+                                                         (filter (fn [{:keys [directive-type]}]
+                                                                   (allowed-directives directive-type))))
+                              visitor (or (first (map directive->visitor applicable-directives))
+                                          (constantly v))
+                              value (visitor {:category :enum-value
+                                              :execution-context {:schema schema}
+                                              :selector nil
+                                              :resolver (constantly v)})]
+                          (unwrapper (-> selector-context
+                                         (assoc :resolved-value value)
+                                         (update :path conj i)))))
                       resolved-value))))))
 
     :non-null
@@ -865,7 +880,7 @@
           :else
           (next-selector selector-context))))
 
-    :root                                                   ;;
+    :root
     (create-root-selector schema field (:type type))))
 
 (defn ^:private default-field-description
@@ -946,9 +961,11 @@
 (defn ^:private types-with-category
   "Extracts from a compiled schema all the types with a matching category (:object, :interface, etc.)."
   [schema category]
-  (->> schema
+  (if (= :schema category)
+    schema
+    (->> schema
        vals
-       (filter #(= category (:category %)))))
+       (filter #(= category (:category %))))))
 
 (defn ^:private compile-fields
   [type-def]
@@ -1027,9 +1044,10 @@
         ;; The detail for each value is the map that may includes :enum-value and
         ;; may include :description, :deprecated, and/or :directives.
         details (reduce (fn [m {:keys [enum-value] :as detail}]
-                               (assoc m enum-value detail))
-                             {}
-                             value-defs)]
+                          ;; TODO: Do directive visiting here?
+                          (assoc m enum-value detail))
+                        {}
+                        value-defs)]
     (when-not (= (count values) (count values-set))
       (throw (ex-info (format "Values defined for enum %s must be unique."
                               (-> enum-def :type-name q))
@@ -1406,12 +1424,36 @@
                            :deprecated {:args {:reason {:type 'String}}
                                         :locations #{:field-definition :enum-value}})))))
 
+(defn ^:private attach-directive-visitors
+  [schema directive-visitors]
+  (doseq [[name visitor] directive-visitors]
+    (when (not (ifn? visitor))
+      (throw (ex-info (format "Directive visitor for '%s' is not a function" name)
+                      {:directive name
+                       :visitor visitor}))))
+  (assoc schema constants/directive-visitors-key directive-visitors))
+
 (defn ^:private validate-directives-by-category
   [schema category]
   (run!
     #(validate-directives-in-def schema % category)
     (types-with-category schema category))
 
+  schema)
+
+(defn ^:private validate-schema-directives
+  [{::keys [directive-defs directives] :as schema}]
+  (doseq [{:keys [directive-type]} directives
+          :let [{:keys [locations] :as directive-def} (get directive-defs directive-type)]]
+    (when-not directive-def
+      (throw (ex-info (format "Schema references unknown directive @%s."
+                              (name directive-type))
+                      {:directive-type directive-type})))
+    (when-not (contains? (:locations directive-def) :schema)
+      (throw (ex-info (format "Directive @%s on schema is not applicable."
+                              (name directive-type))
+                      {:directive-type directive-type
+                       :allowed-locations locations}))))
   schema)
 
 (defn ^:private validate-enum-directives
@@ -1459,11 +1501,13 @@
                                      :subscriptions
                                      (map-vals #(if-not (:resolve %)
                                                   (assoc % :resolve default-subscription-resolver)
-                                                  %)))]
+                                                  %)))
+        directives (:directives schema)]
     (-> {::roots {:query query
                   :mutation mutation
                   :subscription subscription}
-         ::options options}
+         ::options options
+         ::directives directives}
         (xfer-types merged-scalars :scalar)
         (xfer-types (:enums schema) :enum)
         (xfer-types (:unions schema) :union)
@@ -1479,9 +1523,11 @@
         (merge-root :mutation :__Mutations mutation)
         (merge-root :subscription :__Subscriptions subscription)
         (compile-directive-defs (:directive-defs schema))
+        (attach-directive-visitors (:directive-visitors options))
         (prepare-and-validate-interfaces)
         (prepare-and-validate-objects :object options)
         (prepare-and-validate-objects :input-object options)
+        (validate-schema-directives)
         (validate-directives-by-category :union)
         (validate-directives-by-category :scalar)
         validate-enum-directives
