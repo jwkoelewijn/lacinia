@@ -24,6 +24,7 @@
              keepv as-keyword *exception-context*]]
     [com.walmartlabs.lacinia.schema :as schema]
     [com.walmartlabs.lacinia.constants :as constants]
+    [com.walmartlabs.lacinia.directives :as directives]
     [clojure.spec.alpha :as s]
     [com.walmartlabs.lacinia.resolve :as resolve]
     [com.walmartlabs.lacinia.parser.query :as qp]
@@ -319,19 +320,12 @@
             default-values (collect-default-values object-fields)
             required-keys (keys (filter-vals non-null-kind? object-fields))
 
-            directives (constants/directive-definitions-key schema)
-            allowed-directives (-> directives keys set)
-            directive->visitor (fn directive->visitor [{:keys [directive-type]}]
-                                 (get-in schema [constants/directive-visitors-key directive-type]))
+
 
             process-object-field (fn [m k v]
                                    (if-let [field (get object-fields k)]
                                      (let [directives (:directives field)
-                                           applicable-directives (->> directives
-                                                                      (filter (fn [{:keys [directive-type]}]
-                                                                                (allowed-directives directive-type))))
-                                           visitor (or (first (map directive->visitor applicable-directives))
-                                                       (constantly v))]
+                                           visitor (directives/build-visitor schema nil (constantly v) directives)]
                                        (assoc m k
                                               (process-literal-argument schema field (visitor {:category :input-field-definition
                                                                                                :execution-context {:schema schema}
@@ -344,14 +338,7 @@
                                     {}
                                     arg-value)
 
-
-
-            applicable-directives (->> (get-in schema [type-name :directives])
-                                       (filter (fn [{:keys [directive-type]}]
-                                                 (allowed-directives directive-type))))
-
-            visitor (or (first (map directive->visitor applicable-directives))
-                        (constantly object-value))
+            visitor (directives/build-visitor schema type-name (constantly object-value))
 
             with-defaults (merge default-values (visitor {:category :input-object
                                                           :execution-context {:schema schema}

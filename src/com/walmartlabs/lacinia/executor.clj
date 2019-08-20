@@ -22,6 +22,7 @@
     [com.walmartlabs.lacinia.resolve :as resolve
      :refer [resolve-as combine-results]]
     [com.walmartlabs.lacinia.selector-context :as sc]
+    [com.walmartlabs.lacinia.directives :as directives]
     [com.walmartlabs.lacinia.constants :as constants])
   (:import
     (clojure.lang PersistentQueue)))
@@ -107,8 +108,7 @@
                      :value value}))
 
     :else
-    (or
-        (get-in type [:fields field :resolve])
+    (or (get-in type [:fields field :resolve])
         (throw (ex-info "Sanity check: field not present."
                         {:type resolved-type
                          :value value})))))
@@ -233,18 +233,7 @@
         non-nullable-field? (-> field-selection :field-definition :type :kind (= :non-null))
 
         schema (constants/schema-key (:context execution-context))
-        directives (constants/directive-definitions-key schema)
-        allowed-directives (-> directives keys set)
-        applicable-directives (->> (-> field-selection :field-definition :directives)
-                                   (filter (fn [{:keys [directive-type]}]
-                                             (allowed-directives directive-type))))
-
-        directive->visitor (fn directive->visitor [{:keys [directive-type]}]
-                             (get-in schema [constants/directive-visitors-key directive-type]))
-
-        visitor (or (first (map directive->visitor applicable-directives))
-                    (fn [{:keys [execution-context field-selection]}]
-                      (resolve-and-select execution-context field-selection)))
+        visitor (directives/build-visitor schema alias resolve-and-select (-> field-selection :field-definition :directives))
 
         resolver-result (visitor {:category :field
                                   :resolver resolve-and-select
@@ -364,29 +353,16 @@
           (resolve-as (ordered-map))
           sub-selections))
 
-(defn visit-directive-visitors [schema execution-context selection]
-  (let [directives (constants/directive-definitions-key schema)
-        allowed-directives (-> directives keys set)
-
-        field-type (get-in selection [:field-definition :type :type :type])
-        category (get-in schema [field-type :category])
-
-        applicable-directives (->> (get-in schema [field-type :directives])
-                                   (filter (fn [{:keys [directive-type]}]
-                                             (allowed-directives directive-type))))
-
-        directive->visitor (fn directive->visitor [{:keys [directive-type]}]
-                             (get-in schema [constants/directive-visitors-key directive-type]))
-
-        visitor (or (first (map directive->visitor applicable-directives))
-                    (fn [{:keys [execution-context field-selection]}]
-                      (invoke-resolver-for-field (update execution-context :path conj (:field field-selection))
-                                                 field-selection)))
+(defn visit-directive-visitors [schema field-type execution-context selection]
+  (let [visitor (directives/build-visitor schema field-type (fn [execution-context field-selection]
+                                                              (invoke-resolver-for-field (update execution-context :path conj (:field field-selection))
+                                                                                         field-selection)))
 
         directive-visitor-for-argument (fn directive-visitor-for-argument [argument _execution-context selection]
                                          (let [directives (get-in selection [:field-definition :args argument :directives])]
                                            (if (seq directives)
-                                             (let [visitors (map directive->visitor directives)]
+                                             (let [visitors (map (directives/directive->visitor schema)
+                                                                 directives)]
                                                (first visitors))
                                              nil)))
 
@@ -395,17 +371,18 @@
                                                (update selection :arguments (fn [args]
                                                                               (reduce (fn [mem [k v]]
                                                                                         (if-let [visitor (directive-visitor-for-argument k execution-context selection)]
-                                                                                          (assoc mem k (visitor {:category :argument-definition
+                                                                                          (assoc mem k (visitor {:category          :argument-definition
                                                                                                                  :execution-context execution-context
                                                                                                                  :field-selection   selection
                                                                                                                  :resolver          (fn [_ _] (get mem k))}))
                                                                                           (assoc mem k v)))
                                                                                       args
                                                                                       args))))]
-    (visitor {:category category
+    (visitor {:category (get-in schema [field-type :category])
               :execution-context execution-context
               :field-selection   (visit-argument-definition-directives execution-context selection)
               :resolver          invoke-resolver-for-field})))
+
 
 (defn ^:private resolve-and-select
   "Recursive resolution of a field within a containing field's resolved value.
@@ -486,10 +463,7 @@
 
         direct-fn (-> selection :field-definition :direct-fn)
 
-        schema (constants/schema-key (:context execution-context))
-
-        directive->visitor (fn directive->visitor [{:keys [directive-type]}]
-                             (get-in schema [constants/directive-visitors-key directive-type]))]
+        schema (constants/schema-key (:context execution-context))]
 
     ;; For fragments, we start with a single value and it passes right through to
     ;; sub-selections, without changing value or type.
@@ -507,26 +481,16 @@
       ;; the selector, which returns a ResolverResult. Thus we've peeled back at least one layer
       ;; of ResolveResultPromise.
       direct-fn
-      (let [directives (constants/directive-definitions-key schema)
-            allowed-directives (-> directives keys set)
-            field-type (get-in selection [:field-definition :type :type])
-
+      (let [field-type (get-in selection [:field-definition :type :type])
             category (get-in schema [field-type :category])
-
-            applicable-directives (->> (get-in schema [field-type :directives])
-                                       (filter (fn [{:keys [directive-type]}]
-                                                 (allowed-directives directive-type))))
-            val (-> execution-context'
-                    :resolved-value
-                    direct-fn)
-            visitor (or (first (map directive->visitor applicable-directives))
-                        (constantly val))]
+            resolver (fn [_ _] (direct-fn (-> execution-context' :resolved-value)))
+            visitor (build-visitor schema field-type resolver)]
 
         (process-resolved-value
          (visitor {:category category
-                   :execution-context execution-context
-                   :field-selection   selection
-                   :resolver          (fn [_ _] direct-fn)})))
+                   :execution-context execution-context'
+                   :field-selection selection
+                   :resolver resolver})))
 
       ;; Here's where it comes together.  The field's selector
       ;; does the validations, and for list types, does the mapping.
@@ -535,8 +499,9 @@
       ;; and recurse down a level.  The result is a map or a list of maps.
 
       :else
-      (let [final-result (resolve/resolve-promise)]
-        (resolve/on-deliver! (visit-directive-visitors schema execution-context selection)
+      (let [final-result (resolve/resolve-promise)
+            field-type (get-in selection [:field-definition :type :type :type])]
+        (resolve/on-deliver! (visit-directive-visitors schema field-type execution-context selection)
                              (fn receive-resolved-value-from-field [resolved-value]
                                (resolve/on-deliver! (process-resolved-value resolved-value)
                                                     (fn deliver-selection-for-field [resolved-value]
@@ -560,22 +525,12 @@
         *extensions (atom {})
         *timings (when (:com.walmartlabs.lacinia/enable-timing? context)
                   (atom {}))
+
         schema (get parsed-query constants/schema-key)
 
-        allowed-directives (-> schema constants/directive-definitions-key keys set)
-
-        applicable-directives (->> (get schema :com.walmartlabs.lacinia.schema/directives)
-                                   (filter (fn [{:keys [directive-type]}]
-                                             (allowed-directives directive-type))))
-
-        directive->visitor (fn directive->visitor [{:keys [directive-type]}]
-                             (get-in schema [constants/directive-visitors-key directive-type]))
-
-        visitor (or (first (map directive->visitor applicable-directives))
-                    (constantly schema))
+        visitor (build-visitor schema nil (constantly schema))
 
         context' (assoc context constants/schema-key
-                        ;; visit schema here
                         (visitor {:category :schema
                                   :execution-context {:schema (get parsed-query constants/schema-key)}
                                   :field-selection nil

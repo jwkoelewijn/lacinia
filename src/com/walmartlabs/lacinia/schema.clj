@@ -35,7 +35,8 @@
    [clojure.set :refer [difference]]
    [clojure.pprint :as pprint]
    [com.walmartlabs.lacinia.selector-context :as sc]
-   [com.walmartlabs.lacinia.constants :as constants])
+   [com.walmartlabs.lacinia.constants :as constants]
+   [com.walmartlabs.lacinia.directives :as directives])
   (:import
     (clojure.lang IObj)
     (java.io Writer)))
@@ -841,21 +842,15 @@
                                       next-sc (sc/apply-wrapped-value sc v)]
                                   (if (sc/is-wrapped-value? next-v)
                                     (recur next-v next-sc)
-                                    (next-selector (assoc next-sc :resolved-value next-v)))))))
-                directives (constants/directive-definitions-key schema)
-                allowed-directives (-> directives keys set)
-                directive->visitor (fn directive->visitor [{:keys [directive-type]}]
-                                     (get-in schema [constants/directive-visitors-key directive-type]))]
+                                    (next-selector (assoc next-sc :resolved-value next-v)))))))]
             (reduce #(combine-results conj %1 %2)
                     (resolve-as [])
                     (map-indexed
                       (fn [i v]
                         (let [field-type (get-in type [:type :type])
-                              applicable-directives (->> (get-in schema [field-type :values-detail v :directives])
-                                                         (filter (fn [{:keys [directive-type]}]
-                                                                   (allowed-directives directive-type))))
-                              visitor (or (first (map directive->visitor applicable-directives))
-                                          (constantly v))
+
+
+                              visitor (directives/build-visitor schema nil (constantly v) (get-in schema [field-type :values-detail v :directives]))
                               value (visitor {:category :enum-value
                                               :execution-context {:schema schema}
                                               :selector nil
