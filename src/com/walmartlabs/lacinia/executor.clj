@@ -361,9 +361,20 @@
         directive-visitor-for-argument (fn directive-visitor-for-argument [argument _execution-context selection]
                                          (let [directives (get-in selection [:field-definition :args argument :directives])]
                                            (if (seq directives)
-                                             (let [visitors (map (directives/directive->visitor schema)
-                                                                 directives)]
-                                               (first visitors))
+                                             (let [chain (map (directives/directive->visitor2 schema)
+                                                              directives)]
+                                               (fn [{:keys [category execution-context field-selection resolver]}]
+                                                 (if (not (seq chain))
+                                                   (resolver execution-context field-selection)
+                                                   (loop [[[directive visitor] & rest] chain
+                                                          ctx execution-context]
+                                                     (if visitor
+                                                       (recur rest (assoc ctx :previous-directive-value (visitor {:execution-context (assoc ctx :directive-args (:directive-args directive)
+                                                                                                                                                :current-directive directive)
+                                                                                                                  :field-selection field-selection
+                                                                                                                  :resolver resolver
+                                                                                                                  :category category})))
+                                                       (:previous-directive-value ctx))))))
                                              nil)))
 
         visit-argument-definition-directives (fn visit-argument-definition-directives
@@ -501,7 +512,7 @@
       :else
       (let [final-result (resolve/resolve-promise)
             field-type (get-in selection [:field-definition :type :type :type])]
-        (resolve/on-deliver! (visit-directive-visitors schema field-type execution-context selection)
+        (resolve/on-deliver! (visit-directive-visitors schema field-type execution-context' selection)
                              (fn receive-resolved-value-from-field [resolved-value]
                                (resolve/on-deliver! (process-resolved-value resolved-value)
                                                     (fn deliver-selection-for-field [resolved-value]
