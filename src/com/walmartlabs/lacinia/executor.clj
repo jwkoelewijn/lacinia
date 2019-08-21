@@ -411,6 +411,7 @@
         (fn selector-callback [{:keys [resolved-value resolved-type execution-context] :as selection-context}]
           ;; Any errors from the resolver (via with-errors) or anywhere along the
           ;; selection pipeline are enhanced and added to the execution context.
+
           (apply-errors selection-context :errors :*errors)
           (apply-errors selection-context :warnings :*warnings)
 
@@ -484,8 +485,7 @@
       (let [field-type (get-in selection [:field-definition :type :type])
             category (get-in schema [field-type :category])
             resolver (fn [_ _] (direct-fn (-> execution-context' :resolved-value)))
-            visitor (build-visitor schema field-type resolver)]
-
+            visitor (directives/build-visitor schema field-type resolver)]
         (process-resolved-value
          (visitor {:category category
                    :execution-context execution-context'
@@ -528,7 +528,7 @@
 
         schema (get parsed-query constants/schema-key)
 
-        visitor (build-visitor schema nil (constantly schema))
+        visitor (directives/build-visitor schema nil (constantly schema))
 
         context' (assoc context constants/schema-key
                         (visitor {:category :schema

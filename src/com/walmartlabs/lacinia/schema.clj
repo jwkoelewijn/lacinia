@@ -857,7 +857,7 @@
                                               :resolver (constantly v)})]
                           (unwrapper (-> selector-context
                                          (assoc :resolved-value value)
-                                         (update [:execution-context :path] conj i)))))
+                                         (update-in [:execution-context :path] conj i)))))
                       resolved-value))))))
 
     :non-null
