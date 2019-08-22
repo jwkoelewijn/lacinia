@@ -2,10 +2,6 @@
   (:require [com.walmartlabs.lacinia.constants :as constants]))
 
 (defn directive->visitor [schema]
-  (fn [{:keys [directive-type]}]
-    (get-in schema [constants/directive-visitors-key directive-type])))
-
-(defn directive->visitor2 [schema]
   (fn [{:keys [directive-type] :as directive}]
     [directive (get-in schema [constants/directive-visitors-key directive-type])]))
 
@@ -14,12 +10,12 @@
     (contains? visitors directive-type)))
 
 (defn build-visitor
-  ([schema field-type resolver directives-for-type]
+  ([schema directives-for-type]
    (let [allowed-directives (-> schema constants/directive-definitions-key keys set)
          applicable-directives (->> directives-for-type
                                     (filter #(allowed-directives (:directive-type %)))
                                     (filter #(has-visitor? schema (:directive-type %))))
-         chain (map (directive->visitor2 schema)
+         chain (map (directive->visitor schema)
                     applicable-directives)]
      (fn [{:keys [category execution-context field-selection resolver]}]
        (if (not (seq chain))
@@ -32,10 +28,10 @@
                                                                         :field-selection field-selection
                                                                         :resolver resolver
                                                                         :category category})))
-             (:previous-directive-value ctx)))))))
+             (:previous-directive-value ctx))))))))
 
-  ([schema field-type resolver]
-   (build-visitor schema field-type resolver (get-in schema
-                                                     (if field-type
-                                                       [field-type :directives]
-                                                       [:com.walmartlabs.lacinia.schema/directives])))))
+(defn build-visitor-for-type [schema type]
+  (build-visitor schema (get-in schema
+                                (if type
+                                  [type :directives]
+                                  [:com.walmartlabs.lacinia.schema/directives]))))

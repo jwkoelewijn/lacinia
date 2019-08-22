@@ -233,7 +233,7 @@
         non-nullable-field? (-> field-selection :field-definition :type :kind (= :non-null))
 
         schema (constants/schema-key (:context execution-context))
-        visitor (directives/build-visitor schema alias resolve-and-select (-> field-selection :field-definition :directives))
+        visitor (directives/build-visitor schema (-> field-selection :field-definition :directives))
 
         resolver-result (visitor {:category :field
                                   :resolver resolve-and-select
@@ -354,14 +354,12 @@
           sub-selections))
 
 (defn visit-directive-visitors [schema field-type execution-context selection]
-  (let [visitor (directives/build-visitor schema field-type (fn [execution-context field-selection]
-                                                              (invoke-resolver-for-field (update execution-context :path conj (:field field-selection))
-                                                                                         field-selection)))
+  (let [visitor (directives/build-visitor-for-type schema field-type)
 
         directive-visitor-for-argument (fn directive-visitor-for-argument [argument _execution-context selection]
                                          (let [directives (get-in selection [:field-definition :args argument :directives])]
                                            (if (seq directives)
-                                             (let [chain (map (directives/directive->visitor2 schema)
+                                             (let [chain (map (directives/directive->visitor schema)
                                                               directives)]
                                                (fn [{:keys [category execution-context field-selection resolver]}]
                                                  (if (not (seq chain))
@@ -496,7 +494,7 @@
       (let [field-type (get-in selection [:field-definition :type :type])
             category (get-in schema [field-type :category])
             resolver (fn [_ _] (direct-fn (-> execution-context' :resolved-value)))
-            visitor (directives/build-visitor schema field-type resolver)]
+            visitor (directives/build-visitor-for-type schema field-type)]
         (process-resolved-value
          (visitor {:category category
                    :execution-context execution-context'
@@ -539,7 +537,7 @@
 
         schema (get parsed-query constants/schema-key)
 
-        visitor (directives/build-visitor schema nil (constantly schema))
+        visitor (directives/build-visitor-for-type schema nil)
 
         context' (assoc context constants/schema-key
                         (visitor {:category :schema

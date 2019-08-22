@@ -850,7 +850,7 @@
                         (let [field-type (get-in type [:type :type])
 
 
-                              visitor (directives/build-visitor schema nil (constantly v) (get-in schema [field-type :values-detail v :directives]))
+                              visitor (directives/build-visitor schema (get-in schema [field-type :values-detail v :directives]))
                               value (visitor {:category :enum-value
                                               :execution-context {:schema schema}
                                               :selector nil

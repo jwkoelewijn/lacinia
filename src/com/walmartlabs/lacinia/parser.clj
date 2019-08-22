@@ -325,7 +325,7 @@
             process-object-field (fn [m k v]
                                    (if-let [field (get object-fields k)]
                                      (let [directives (:directives field)
-                                           visitor (directives/build-visitor schema nil (constantly v) directives)]
+                                           visitor (directives/build-visitor schema directives)]
                                        (assoc m k
                                               (process-literal-argument schema field (visitor {:category :input-field-definition
                                                                                                :execution-context {:schema schema}
@@ -338,7 +338,7 @@
                                     {}
                                     arg-value)
 
-            visitor (directives/build-visitor schema type-name (constantly object-value))
+            visitor (directives/build-visitor-for-type schema type-name)
 
             with-defaults (merge default-values (visitor {:category :input-object
                                                           :execution-context {:schema schema}

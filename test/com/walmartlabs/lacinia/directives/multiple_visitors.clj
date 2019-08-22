@@ -64,7 +64,6 @@
                                                 :directive-visitors directive-visitors})
         actual-query-result (execute compiled-schema query nil nil)]
     (testing (str "Visits " type " directives")
-      (clojure.pprint/pprint @visitor-record)
       (is (seq @visitor-record))
       (is (= 2 (count @visitor-record)))
       (is (= [type type]
