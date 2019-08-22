@@ -848,8 +848,6 @@
                     (map-indexed
                       (fn [i v]
                         (let [field-type (get-in type [:type :type])
-
-
                               visitor (directives/build-visitor schema (get-in schema [field-type :values-detail v :directives]))
                               value (visitor {:category :enum-value
                                               :execution-context {:schema schema}
@@ -1040,7 +1038,6 @@
         ;; The detail for each value is the map that may includes :enum-value and
         ;; may include :description, :deprecated, and/or :directives.
         details (reduce (fn [m {:keys [enum-value] :as detail}]
-                          ;; TODO: Do directive visiting here?
                           (assoc m enum-value detail))
                         {}
                         value-defs)]

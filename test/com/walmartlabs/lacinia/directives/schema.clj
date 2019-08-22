@@ -241,6 +241,3 @@
                     :enum-value :green}
             :red {:enum-value :red}}
            (get-in schema [:Color :values-detail])))))
-
-(comment
- (run-tests))

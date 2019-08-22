@@ -353,7 +353,7 @@
           (resolve-as (ordered-map))
           sub-selections))
 
-(defn visit-directive-visitors [schema field-type execution-context selection]
+(defn apply-directive-visitors [schema field-type execution-context selection]
   (let [visitor (directives/build-visitor-for-type schema field-type)
 
         directive-visitor-for-argument (fn directive-visitor-for-argument [argument _execution-context selection]
@@ -510,7 +510,7 @@
       :else
       (let [final-result (resolve/resolve-promise)
             field-type (get-in selection [:field-definition :type :type :type])]
-        (resolve/on-deliver! (visit-directive-visitors schema field-type execution-context' selection)
+        (resolve/on-deliver! (apply-directive-visitors schema field-type execution-context' selection)
                              (fn receive-resolved-value-from-field [resolved-value]
                                (resolve/on-deliver! (process-resolved-value resolved-value)
                                                     (fn deliver-selection-for-field [resolved-value]
