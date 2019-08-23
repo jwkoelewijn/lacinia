@@ -1,4 +1,4 @@
-(ns com.walmartlabs.lacinia.directives.schema
+(ns com.walmartlabs.lacinia.directives.schema-test
   (:require
     [clojure.test :refer [deftest is testing run-tests]]
     [com.walmartlabs.test-utils :refer [expect-exception]]
