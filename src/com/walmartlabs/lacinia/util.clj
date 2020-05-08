@@ -34,7 +34,7 @@
                 (var? reference)
                 field
 
-                :let [factory? (not (keyword? reference))
+                :let [factory? (sequential? reference)
                       callback-source (get callbacks-map
                                            (if factory?
                                              (first reference)
@@ -56,15 +56,16 @@
   "Given a GraphQL schema and a map of keywords to resolver fns, replace
   each placeholder keyword in the schema with the actual resolver fn.
 
-  resolver-m is a map from keyword to resolver function or resolver factory.
+  resolver-m is a map from of resolver functions and resolver function factories.
+  The keys are usually keywords, but may be any value including string or symbol.
 
-  When the value in the :resolve key is a keyword, it is simply replaced
+  When the value in the :resolve key is a simjple value, it is simply replaced
   with the corresponding resolver function from resolver-m.
 
   Alternately, the :resolve value may be a seq, indicating a resolver factory.
 
-  The first value in the seq is used to select the resolver factory function, which applied
-  with the remaining values in the seq."
+  The first value in the seq is used to select the resolver factory function, which
+  is then invoked, via `apply`, with the remaining values in the seq."
   [schema resolver-m]
   (let [f (fn [field-container]
             (attach-callbacks field-container resolver-m :resolve "Resolver"))
@@ -100,6 +101,25 @@
                              (update :parse transform)
                              (update :serialize transform)))
                        %))))
+
+(defn ^{:added "0.36.0"} inject-enum-transformers
+  "Given a GraphQL schema, injects transformers for enums into the schema.
+
+  transform-m maps from the scalar name (a keyword) to a map with keys :parse
+  and/or :serialize; these are applied to the Enum.
+
+  Each enum must exist, or an exception is thrown."
+  [schema transform-m]
+  (let [f (fn [enums enum m]
+            (when-not (contains? enums enum)
+              (throw (ex-info "Undefined enum when injecting enum transformer."
+                              {:enum enum
+                               :enums (-> enums keys sort vec)})))
+            (let [{:keys [parse serialize]} m]
+              (update enums enum #(cond-> %
+                                    parse (assoc :parse parse)
+                                    serialize (assoc :serialize serialize)))))]
+    (update schema :enums #(reduce-kv f % transform-m))))
 
 (defn as-error-map
   "Converts an exception into an error map, including a :message key, plus
@@ -158,7 +178,7 @@
   The key identifies where the resolver should be added, in the form `:Type/field`.
 
   Alternately, the key may be of the format `:queries/name` (or `:mutations/name` or
-  `subscriptions/name`).
+  `:subscriptions/name`).
 
   Throws an exception if the target of the resolver can't be found.
 

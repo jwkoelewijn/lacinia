@@ -343,7 +343,12 @@
                                                           ::deprecated
                                                           ::directives])))
 (s/def ::values (s/and (s/coll-of ::enum-value-def) seq))
+;; Regrettably, :parse and :serialize on ::enum could reasonably be maps, but
+;; that can't be easily expressed here (unless we create a :enum/parse and :enum/serialize).
+;; We'll go there if there's a need for it.
 (s/def ::enum (s/keys :opt-un [::description
+                               ::parse
+                               ::serialize
                                ::directives]
                       :req-un [::values]))
 ;; The type of an input object field is more constrained than an ordinary field, but that is
@@ -381,7 +386,7 @@
 (s/def ::arguments (s/nilable (s/map-of ::schema-key any?)))
 
 ;; Same issue as with ::resolve.
-(s/def ::stream fn?)
+(s/def ::stream ::function-or-var)
 
 (s/def ::queries (s/map-of ::schema-key ::operation))
 (s/def ::mutations (s/map-of ::schema-key ::operation))
@@ -425,7 +430,7 @@
 
 ;; Again, this can be fleshed out once we have a handle on defining specs for
 ;; functions:
-(s/def ::default-field-resolver fn?)
+(s/def ::default-field-resolver ::function-or-var)
 
 (s/def ::promote-nils-to-empty-list? boolean?)
 
@@ -657,7 +662,7 @@
 
         selector (if (= :scalar category)
                    (let [serializer (:serialize field-type)]
-                     (fn select-coerion [selector-context]
+                     (fn select-coercion [selector-context]
                        (cond-let
 
                          :let [{:keys [resolved-value]} selector-context]
@@ -692,22 +697,29 @@
                    selector)
 
         selector (if (= :enum category)
-                   (let [possible-values (-> field-type :values set)]
+                   (let [possible-values (-> field-type :values set)
+                         serializer (:serialize field-type)]
                      (fn validate-enum [{:keys [resolved-value]
                                          :as selector-context}]
                        (cond-let
+                         ;; The resolver function can return a value that makes sense from
+                         ;; the application's model (for example, a namespaced keyword or even a string)
+                         ;; and the enum's serializer converts that to a keyword, which is then
+                         ;; validated to match a known value for the enum.
+
                          (nil? resolved-value)
                          (selector selector-context)
 
-                         :let [keyword-value (as-keyword resolved-value)]
+                         :let [serialized (serializer resolved-value)]
 
-                         (not (possible-values keyword-value))
-                         (throw (ex-info "Field resolver returned an undefined enum value."
-                                         {:resolved-value resolved-value
-                                          :enum-values possible-values}))
+                         (not (possible-values serialized))
+                         (selector-error selector-context (error "Field resolver returned an undefined enum value."
+                                                                 {:resolved-value resolved-value
+                                                                  :serialized-value serialized
+                                                                  :enum-values possible-values}))
 
                          :else
-                         (selector (assoc selector-context :resolved-value keyword-value)))))
+                         (selector (assoc selector-context :resolved-value serialized)))))
                    selector)
 
         union-or-interface? (#{:interface :union} category)
@@ -1020,7 +1032,8 @@
 (defn ^:private normalize-enum-value-def
   "The :values key of an enum definition is either a seq of enum values, or a seq of enum value defs.
   The enum values are just the keyword/symbol/string.
-  The enum value defs have keys :enum-value, :description, and :directives.
+  The enum value defs have keys :enum-value, :description, and :directives and optional keys
+  :parse and :serialize.
   This normalizes into the enum value def form, and ensures that the :enum-value key is a keyword."
   [value-def]
   (if (map? value-def)
@@ -1033,6 +1046,9 @@
                         :values
                         (map normalize-enum-value-def)
                         (mapv apply-deprecated-directive))
+        {:keys [serialize parse]
+         :or {serialize as-keyword
+              parse identity}} enum-def
         values (mapv :enum-value value-defs)
         values-set (set values)
         ;; The detail for each value is the map that may includes :enum-value and
@@ -1046,6 +1062,8 @@
                               (-> enum-def :type-name q))
                       {:enum enum-def})))
     (assoc enum-def
+           :parse parse
+           :serialize serialize
            :values values
            :values-detail details
            :values-set values-set)))
@@ -1557,7 +1575,7 @@
          :options (s/? (s/nilable ::compile-options))))
 
 (defn compile
-  "Compiles an schema, verifies its correctness, and prepares it for query execution.
+  "Compiles a schema, verifies its correctness, and prepares it for query execution.
   The compiled schema is in an entirely different format than the input schema.
 
   The format of the compiled schema is subject to change without notice.
