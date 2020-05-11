@@ -217,36 +217,30 @@
         resolver-result (visitor {:category :field
                                   :resolver resolve-and-select
                                   :execution-context execution-context
-                                  :field-selection field-selection})
+                                  :field-selection field-selection})]
+    (transform-result resolver-result
+                     (fn [resolved-field-value]
+                       (let [sub-selection (cond
+                                             (and non-nullable-field?
+                                                  (nil? resolved-field-value))
+                                             ::null
 
-        final-result (resolve/resolve-promise)]
-    (resolve/on-deliver! resolver-result
-                         (fn [resolved-field-value]
-    ;; PREVIOUS CONFLICT
-    ;    resolver-result (resolve-and-select execution-context field-selection)
-    ;(transform-result resolver-result
-    ;                  (fn [resolved-field-value]))
-                           (let [sub-selection (cond
-                                                 (and non-nullable-field?
-                                                      (nil? resolved-field-value))
-                                                 ::null
+                                             ;; child field was non-nullable and resolved to null,
+                                             ;; but parent is nullable so let's null parent
+                                             (and (= resolved-field-value ::null)
+                                                  (not non-nullable-field?))
+                                             nil
 
-                                                 ;; child field was non-nullable and resolved to null,
-                                                 ;; but parent is nullable so let's null parent
-                                                 (and (= resolved-field-value ::null)
-                                                      (not non-nullable-field?))
-                                                 nil
+                                             (map? resolved-field-value)
+                                             (propogate-nulls non-nullable-field? resolved-field-value)
 
-                                                 (map? resolved-field-value)
-                                                 (propogate-nulls non-nullable-field? resolved-field-value)
+                                             ;; TODO: We also support sets
+                                             (vector? resolved-field-value)
+                                             (mapv #(propogate-nulls non-nullable-field? %) resolved-field-value)
 
-                                                 ;; TODO: We also support sets
-                                                 (vector? resolved-field-value)
-                                                 (mapv #(propogate-nulls non-nullable-field? %) resolved-field-value)
-
-                                                 :else
-                                                 resolved-field-value)]
-                             (->ResultTuple alias sub-selection))))))
+                                             :else
+                                             resolved-field-value)]
+                         (->ResultTuple alias sub-selection))))))
 
 (defn ^:private maybe-apply-fragment
   [execution-context fragment-selection concrete-types]
@@ -486,13 +480,9 @@
       ;; and recurse down a level.  The result is a map or a list of maps.
 
       :else
-      (let [final-result (resolve/resolve-promise)
+      (let [final-result (resolve-promise)
             field-type (get-in selection [:field-definition :type :type :type])]
         (resolve/on-deliver! (apply-directive-visitors schema field-type execution-context' selection)
-
-      ;; PREVIOUS CONFLICT
-      ;(let [final-result (resolve-promise)]
-      ;  (resolve/on-deliver! (invoke-resolver-for-field execution-context' selection)))
                              (fn receive-resolved-value-from-field [resolved-value]
                                (resolve/on-deliver! (process-resolved-value resolved-value)
                                                     (fn deliver-selection-for-field [resolved-value]
