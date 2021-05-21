@@ -1,4 +1,31 @@
-## 0.34.0 -- UNRELEASED
+## 0.37.0 -- UNRELEASED
+
+[Closed Issues](https://github.com/walmartlabs/lacinia/milestone/25?closed=1)
+
+## 0.36.0 -- 13 Feb 2020
+
+It is now possible to provide `:parse` and `:serialize` functions for
+enum types, allowing a mapping between your application's model and
+the GraphQL model.
+
+Capturing of lacinia resolver execution times has been significantly
+changed in an incompatible way (this feature is still experimental).
+
+The Lacinia execution model has changed slightly to support setting a timeout
+on execution; most of the work now executes in a different thread.
+We've also increased Lacinia's ability to split work across multiple threads, along
+with some tiny performance improvements.
+
+[Closed Issues](https://github.com/walmartlabs/lacinia/milestone/24?closed=1)
+
+## 0.35.0 -- 12 Sep 2019
+
+Lacinia now uses the fully qualified field and argument name as `:extension` data
+when reporting errors in fields, field arguments, and variables.
+
+[Closed Issues](https://github.com/walmartlabs/lacinia/milestone/23?closed=1)
+
+## 0.34.0 -- 16 Aug 2019
 
 The new function `com.walmartlabs.lacinia.executor/parsed-query->context`
 makes it possible to use the preview API functions in the executor
@@ -8,6 +35,8 @@ a Pedestal interceptor.
 New preview API function `com.walmartlabs.lacinia.executor/selections-seq2`
 improves on `selections-seq`, returning the name, alias, and arguments of
 each selected field.
+
+[Closed Issues](https://github.com/walmartlabs/lacinia/milestone/22?closed=1)
 
 ## 0.33.0 -- 23 May 2019
 
